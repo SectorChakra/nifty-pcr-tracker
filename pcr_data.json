@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-30T10:15:54.053734+00:00",
+  "generatedAt": "2026-11-02T03:40:51.447144+00:00",
   "nifty": {
     "spot": 23053.1,
     "monthly": {
@@ -292,8 +292,8 @@
     },
     "weekly": {
       "expiry": "2026-11-05",
-      "pcr": 1.306,
-      "bandStrikes": 10,
+      "pcr": 1.205,
+      "bandStrikes": 11,
       "bandWanted": 11,
       "violation": false,
       "equilibriumStrike": null,
@@ -309,14 +309,14 @@
         {
           "strike": 73200,
           "callOI": 0.2,
-          "putOI": 1.5,
+          "putOI": 1.4,
           "callLTP": 1439.55,
           "putLTP": 180.15
         },
         {
           "strike": 73500,
           "callOI": 1.0,
-          "putOI": 4.6,
+          "putOI": 4.5,
           "callLTP": 1174.85,
           "putLTP": 232.0
         },
@@ -337,7 +337,7 @@
         {
           "strike": 74400,
           "callOI": 1.6,
-          "putOI": 1.9,
+          "putOI": 1.8,
           "callLTP": 567.8,
           "putLTP": 531.95
         },
@@ -368,6 +368,13 @@
           "putOI": 0.0,
           "callLTP": 130.05,
           "putLTP": 1300.1
+        },
+        {
+          "strike": 75900,
+          "callOI": 0.8,
+          "putOI": 0.0,
+          "callLTP": 78.65,
+          "putLTP": 1551.65
         }
       ]
     }
