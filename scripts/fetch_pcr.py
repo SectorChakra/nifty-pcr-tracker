@@ -13,12 +13,35 @@ from pcr_common import (
 
 STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "pcr_state.json")
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "pcr_data.json")
+# Today's per-strike OI snapshots, one per run, so a panel can show the change
+# over the last hour. Reset each day; only the last few hours are kept.
+INTRADAY_PATH = os.path.join(os.path.dirname(__file__), "..", "oi_intraday.json")
+HOUR_S = 3600
+KEEP_S = 3 * HOUR_S
 
 # Wide-viewport combined layout renders one row as:
 # call_chg_pct, call_oi(lakh), call_ltp, strike, iv, put_ltp, put_oi(lakh), put_chg_pct
 ROW_RE = re.compile(
     r"(-?[\d.]+%)\n\t\n([\d.]+)\n\t\n([\d.]+)\n\t\n(\d+)\n\t\n([\d.]+)\n\t\n([\d.]+)\n\t\n([\d.]+)\n\t\n(-?[\d.]+%)"
 )
+
+
+def day_change(oi, chg_pct):
+    """OI added today, from Sensibull's "OI Chg%" (change vs the previous
+    day's closing OI -- checked 2026-11-03 against NSE's 02-Nov bhavcopy:
+    NIFTY 03-Nov 22500 PE 124.6 -> 172.3 lakh = +38%, shown "38%"). The
+    percentage is rounded to ~2 significant figures, so this is within about
+    half a percent of the OI, not exact."""
+    if chg_pct is None or chg_pct <= -100:
+        return None
+    return oi - oi / (1 + chg_pct / 100)
+
+
+def parse_pct(txt):
+    try:
+        return float(txt.rstrip("%"))
+    except ValueError:
+        return None
 
 
 def month_key(d):
@@ -64,11 +87,14 @@ def fetch_chain_for_expiry(page, tradingsymbol, expiry_date):
 
     rows = {}
     for m in ROW_RE.finditer(text):
-        (_call_chg_pct, call_oi, call_ltp, strike, _iv,
-         put_ltp, put_oi, _put_chg_pct) = m.groups()
+        (call_chg_pct, call_oi, call_ltp, strike, _iv,
+         put_ltp, put_oi, put_chg_pct) = m.groups()
+        call_oi, put_oi = float(call_oi), float(put_oi)
         rows[int(strike)] = {
-            "callOI": float(call_oi), "putOI": float(put_oi),
+            "callOI": call_oi, "putOI": put_oi,
             "callLTP": float(call_ltp), "putLTP": float(put_ltp),
+            "callDayChg": day_change(call_oi, parse_pct(call_chg_pct)),
+            "putDayChg": day_change(put_oi, parse_pct(put_chg_pct)),
         }
     return spot, rows
 
@@ -93,7 +119,28 @@ def update_crossing_state(state, key, pcr, today_str):
     return day_state["crossed"]
 
 
-def build_timeframe_result(rows, spot, step, band, state, key, today_str):
+def load_intraday(today_str):
+    if os.path.exists(INTRADAY_PATH):
+        with open(INTRADAY_PATH) as f:
+            data = json.load(f)
+        if data.get("date") == today_str:
+            return data
+    return {"date": today_str, "snaps": []}
+
+
+def hour_baseline(intraday, now_s):
+    """The newest snapshot at least an hour old. The pinger is not perfectly
+    regular, so the panel shows the baseline's own time rather than claiming
+    exactly 60 minutes."""
+    old = [sn for sn in intraday["snaps"] if sn["t"] <= now_s - HOUR_S]
+    return old[-1] if old else None
+
+
+def r1(x):
+    return None if x is None else round(x, 1)
+
+
+def build_timeframe_result(rows, spot, step, band, state, key, today_str, baseline=None, snap=None):
     strikes = select_band(rows, spot, step, band)
     if not strikes:
         return None
@@ -103,6 +150,14 @@ def build_timeframe_result(rows, spot, step, band, state, key, today_str):
     violation = pcr < VIOLATION_LOW or pcr > VIOLATION_HIGH
     eq_strike = equilibrium_strike(rows, strikes) if violation else None
     crossed = update_crossing_state(state, key, pcr, today_str)
+    base = (baseline or {}).get("oi", {}).get(key, {})
+    if snap is not None:
+        snap[key] = {str(s): [rows[s]["callOI"], rows[s]["putOI"]] for s in strikes}
+
+    def hour_chg(s, side):
+        b = base.get(str(s))
+        return None if b is None else rows[s][side + "OI"] - b[0 if side == "call" else 1]
+
     return {
         "pcr": round(pcr, 3),
         "bandStrikes": len(strikes),
@@ -114,13 +169,16 @@ def build_timeframe_result(rows, spot, step, band, state, key, today_str):
             {
                 "strike": s, "callOI": rows[s]["callOI"], "putOI": rows[s]["putOI"],
                 "callLTP": rows[s]["callLTP"], "putLTP": rows[s]["putLTP"],
+                "callDayChg": r1(rows[s]["callDayChg"]), "putDayChg": r1(rows[s]["putDayChg"]),
+                "callHourChg": r1(hour_chg(s, "call")), "putHourChg": r1(hour_chg(s, "put")),
             }
             for s in strikes
         ],
+        "hourBaselineAt": baseline["at"] if baseline and base else None,
     }
 
 
-def fetch_symbol(page, symbol_key, cfg, today, today_str, state):
+def fetch_symbol(page, symbol_key, cfg, today, today_str, state, baseline=None, snap=None):
     tradingsymbol = cfg["tradingsymbol"]
     page.goto(f"https://web.sensibull.com/option-chain?tradingsymbol={tradingsymbol}",
               timeout=30000, wait_until="networkidle")
@@ -145,7 +203,8 @@ def fetch_symbol(page, symbol_key, cfg, today, today_str, state):
         monthly_spot, monthly_rows = fetch_chain_for_expiry(page, tradingsymbol, monthly_expiry)
 
     monthly = build_timeframe_result(
-        monthly_rows, monthly_spot, cfg["monthlyStep"], BAND, state, f"{symbol_key}_monthly", today_str)
+        monthly_rows, monthly_spot, cfg["monthlyStep"], BAND, state, f"{symbol_key}_monthly", today_str,
+        baseline, snap)
     if monthly is None:
         print(f"{tradingsymbol}: missing monthly data", file=sys.stderr)
         return None
@@ -157,7 +216,8 @@ def fetch_symbol(page, symbol_key, cfg, today, today_str, state):
 
     if has_weekly:
         weekly = build_timeframe_result(
-            weekly_rows, weekly_spot, cfg["weeklyStep"], BAND, state, f"{symbol_key}_weekly", today_str)
+            weekly_rows, weekly_spot, cfg["weeklyStep"], BAND, state, f"{symbol_key}_weekly", today_str,
+            baseline, snap)
         if weekly is None:
             print(f"{tradingsymbol}: missing weekly data", file=sys.stderr)
             return None
@@ -171,8 +231,13 @@ def main():
     today = date.today()
     today_str = today.isoformat()
     state = load_state()
+    now = datetime.now(timezone.utc)
+    now_s = int(now.timestamp())
+    intraday = load_intraday(today_str)
+    baseline = hour_baseline(intraday, now_s)
+    snap = {}
 
-    out = {"generatedAt": datetime.now(timezone.utc).isoformat()}
+    out = {"generatedAt": now.isoformat()}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -184,7 +249,7 @@ def main():
             viewport={"width": 1280, "height": 900},
         )
         for symbol_key, cfg in SYMBOLS.items():
-            result = fetch_symbol(page, symbol_key, cfg, today, today_str, state)
+            result = fetch_symbol(page, symbol_key, cfg, today, today_str, state, baseline, snap)
             if result is not None:
                 out[symbol_key] = result
         browser.close()
@@ -198,6 +263,10 @@ def main():
         json.dump(out, f, indent=2)
     with open(STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
+    intraday["snaps"] = [sn for sn in intraday["snaps"] if sn["t"] > now_s - KEEP_S]
+    intraday["snaps"].append({"t": now_s, "at": now.isoformat(), "oi": snap})
+    with open(INTRADAY_PATH, "w") as f:
+        json.dump(intraday, f, separators=(",", ":"))
 
     print(f"Wrote pcr_data.json: "
           f"nifty weekly={out['nifty']['weekly']['pcr']} monthly={out['nifty']['monthly']['pcr']}, "

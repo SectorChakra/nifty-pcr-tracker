@@ -59,6 +59,7 @@
     .panels { grid-template-columns: 1fr; }
   }
   .panel {
+    min-width: 0;  /* let the strike table scroll inside the panel on a phone */
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -107,6 +108,14 @@
   }
   tr.strike-detail .ltp-value { color: var(--text); font-weight: 600; }
   .oi-bar-cell { position: relative; }
+  .table-wrap { overflow-x: auto; }
+  td.chg, th.chg { font-variant-numeric: tabular-nums; font-size: 11px; }
+  td.chg.up { color: #7fd1a8; }
+  td.chg.down { color: #ff9a9a; }
+  td.chg.na { color: var(--text-dim); }
+  th.chg { font-size: 10.5px; }
+  .chg-summary { font-size: 11.5px; color: var(--text-dim); margin-top: 10px; line-height: 1.5; }
+  .chg-summary b { color: var(--text); font-weight: 600; }
   .oi-bar { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; opacity: 0.35; }
   .call-bar { background: var(--green); right: 0; }
   .put-bar { background: var(--red); left: 0; }
@@ -205,6 +214,8 @@
   Violation: PCR &lt; 0.7 or &gt; 2.0 &mdash; price tends to gravitate toward the equilibrium strike (near-equal Call/Put OI).
   0.41&rarr;0.80 crossing is an intraday reversal/SL signal &mdash; give it 15-30 min to stabilize before acting.
   Click a strike row to see its Call/Put LTP as of the last refresh.
+  Day &Delta; = OI added since the previous day's close, from Sensibull's OI Chg% (rounded, so within ~0.5% of the OI).
+  1h &Delta; = change against this board's own snapshot from about an hour earlier (time shown on each panel). OI in lakh.
   Live data via Sensibull's public option chain (no broker login); history backfilled from NSE's official F&amp;O bhavcopy archive.
   Refreshed every ~5 min during market hours.
 </footer>
@@ -246,7 +257,17 @@ function renderPanel(elId, label, tf) {
   }
 
   const maxOI = Math.max(...tf.strikes.map(s => Math.max(s.callOI, s.putOI)), 1);
-  html += '<table><thead><tr><th>Call OI</th><th></th><th>Strike</th><th></th><th>Put OI</th></tr></thead><tbody>';
+  const hourAt = tf.hourBaselineAt
+    ? new Date(tf.hourBaselineAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false })
+    : null;
+  html += changeSummary(tf, hourAt);
+  html += '<div class="table-wrap"><table><thead><tr>'
+    + '<th class="chg" title="Call OI change over the last hour' + (hourAt ? ' (since ' + hourAt + ' IST)' : '') + '">1h &Delta;</th>'
+    + '<th class="chg" title="Call OI change today, vs the previous day\'s close">Day &Delta;</th>'
+    + '<th>Call OI</th><th></th><th>Strike</th><th></th><th>Put OI</th>'
+    + '<th class="chg" title="Put OI change today, vs the previous day\'s close">Day &Delta;</th>'
+    + '<th class="chg" title="Put OI change over the last hour' + (hourAt ? ' (since ' + hourAt + ' IST)' : '') + '">1h &Delta;</th>'
+    + '</tr></thead><tbody>';
   for (const s of tf.strikes) {
     const callPct = (s.callOI / maxOI * 100).toFixed(0);
     const putPct = (s.putOI / maxOI * 100).toFixed(0);
@@ -256,22 +277,50 @@ function renderPanel(elId, label, tf) {
     const hasLTP = (s.callLTP !== undefined && s.putLTP !== undefined);
     const isOpen = expandedRows.has(rowId);
     html += '<tr class="strike-row" onclick="toggleDetail(\'' + rowId + '\')">'
+      + chgCell(s.callHourChg) + chgCell(s.callDayChg)
       + '<td>' + s.callOI.toFixed(1) + '</td>'
-      + '<td class="oi-bar-cell" style="width:60px"><div class="oi-bar call-bar" style="width:' + callPct + '%"></div></td>'
+      + '<td class="oi-bar-cell" style="width:44px"><div class="oi-bar call-bar" style="width:' + callPct + '%"></div></td>'
       + '<td class="strike">' + s.strike + '</td>'
-      + '<td class="oi-bar-cell" style="width:60px"><div class="oi-bar put-bar" style="width:' + putPct + '%"></div></td>'
+      + '<td class="oi-bar-cell" style="width:44px"><div class="oi-bar put-bar" style="width:' + putPct + '%"></div></td>'
       + '<td>' + s.putOI.toFixed(1) + '</td>'
+      + chgCell(s.putDayChg) + chgCell(s.putHourChg)
       + '</tr>';
     if (hasLTP) {
       html += '<tr class="strike-detail" id="' + rowId + '" style="display:' + (isOpen ? 'table-row' : 'none') + '">'
-        + '<td colspan="5">'
+        + '<td colspan="9">'
         + 'Strike ' + s.strike + ' &middot; Call LTP <span class="ltp-value">Rs.' + s.callLTP.toFixed(2) + '</span>'
         + ' &middot; Put LTP <span class="ltp-value">Rs.' + s.putLTP.toFixed(2) + '</span>'
         + '</td></tr>';
     }
   }
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   el.innerHTML = html;
+}
+
+// OI change in lakh, signed. Missing (no OI Chg% on the chain, or no snapshot
+// an hour old yet) shows a dash rather than a zero.
+function fmtChg(v) {
+  if (v === null || v === undefined) return '&ndash;';
+  const r = Math.round(v * 10) / 10;
+  return (r > 0 ? '+' : '') + r.toFixed(1);
+}
+function chgCell(v) {
+  const cls = (v === null || v === undefined) ? 'na' : (v > 0.05 ? 'up' : (v < -0.05 ? 'down' : ''));
+  return '<td class="chg ' + cls + '">' + fmtChg(v) + '</td>';
+}
+function sumOf(strikes, key) {
+  const vals = strikes.map(s => s[key]).filter(v => v !== null && v !== undefined);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+}
+function changeSummary(tf, hourAt) {
+  const dc = sumOf(tf.strikes, 'callDayChg'), dp = sumOf(tf.strikes, 'putDayChg');
+  const hc = sumOf(tf.strikes, 'callHourChg'), hp = sumOf(tf.strikes, 'putHourChg');
+  let out = '<div class="chg-summary">OI change across these strikes (lakh) &mdash; '
+    + 'Today: Calls <b>' + fmtChg(dc) + '</b> &middot; Puts <b>' + fmtChg(dp) + '</b>';
+  out += hourAt
+    ? '<br>Last hour (since ' + hourAt + ' IST): Calls <b>' + fmtChg(hc) + '</b> &middot; Puts <b>' + fmtChg(hp) + '</b>'
+    : '<br>Last hour: not yet &mdash; needs a snapshot from an hour ago';
+  return out + '</div>';
 }
 
 function renderSymbol(symbolKey, label, data, hasWeekly) {
