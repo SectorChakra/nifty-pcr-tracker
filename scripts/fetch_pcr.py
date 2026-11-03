@@ -224,6 +224,23 @@ def fetch_symbol(page, symbol_key, cfg, today, today_str, state, baseline=None, 
         result["spot"] = weekly_spot
         result["weekly"] = {"expiry": weekly_expiry.isoformat(), **weekly}
 
+    # Pinned expiries are extras: a miss is logged, never fatal to the run.
+    pinned = []
+    for iso in cfg.get("pinnedExpiries", []):
+        exp = date.fromisoformat(iso)
+        if exp < today or exp in (weekly_expiry, monthly_expiry) or exp not in expiries:
+            continue
+        p_spot, p_rows = fetch_chain_for_expiry(page, tradingsymbol, exp)
+        tf = build_timeframe_result(
+            p_rows, p_spot, cfg["pinnedStep"], cfg["pinnedBand"], state, f"{symbol_key}_exp_{iso}", today_str,
+            baseline, snap)
+        if tf is None:
+            print(f"{tradingsymbol}: missing data for pinned expiry {iso}", file=sys.stderr)
+            continue
+        pinned.append({"expiry": iso, **tf})
+    if pinned:
+        result["pinned"] = pinned
+
     return result
 
 

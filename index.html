@@ -211,6 +211,7 @@
 <footer>
   PCR = Put OI &divide; Call OI over a near-ATM strike band (weekly: 100pt steps, monthly: 500pt steps).
   Bank Nifty shows monthly only &mdash; NSE discontinued its weekly expiry in 2023.
+  A dated Nifty panel (e.g. 17 Nov) is an extra pinned expiry: 50pt steps, &plusmn;500 around ATM; it drops off once that expiry passes.
   Violation: PCR &lt; 0.7 or &gt; 2.0 &mdash; price tends to gravitate toward the equilibrium strike (near-equal Call/Put OI).
   0.41&rarr;0.80 crossing is an intraday reversal/SL signal &mdash; give it 15-30 min to stabilize before acting.
   Click a strike row to see its Call/Put LTP as of the last refresh.
@@ -330,6 +331,17 @@ function renderSymbol(symbolKey, label, data, hasWeekly) {
     renderPanel('panel-' + symbolKey + '-weekly', label + ' Weekly PCR', sym && sym.weekly);
   }
   renderPanel('panel-' + symbolKey + '-monthly', label + ' Monthly PCR', sym && sym.monthly);
+  // Extra expiries pinned in pcr_common.py; panels come and go with the data.
+  const box = document.getElementById('panels-' + symbolKey);
+  box.querySelectorAll('.panel.pinned').forEach(el => el.remove());
+  for (const tf of (sym && sym.pinned) || []) {
+    const el = document.createElement('div');
+    el.className = 'panel pinned';
+    el.id = 'panel-' + symbolKey + '-exp-' + tf.expiry;
+    box.appendChild(el);
+    const d = new Date(tf.expiry + 'T00:00:00');
+    renderPanel(el.id, label + ' ' + d.getDate() + ' ' + d.toLocaleString('en-IN', { month: 'short' }) + ' PCR', tf);
+  }
 }
 
 function parseCSV(text) {

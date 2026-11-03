@@ -2,7 +2,11 @@
 (live, needs Playwright) and backfill_history.py (historical, stdlib only)."""
 
 SYMBOLS = {
-    "nifty": {"tradingsymbol": "NIFTY", "weeklyStep": 100, "monthlyStep": 500, "hasWeekly": True},
+    # pinnedExpiries: extra expiries shown as their own panel until they pass
+    # (added 2026-11-03 for the 17 Nov 23750/24000 CE spread). 50pt steps x 10
+    # keeps the weekly band's +-500 width but shows every listed strike.
+    "nifty": {"tradingsymbol": "NIFTY", "weeklyStep": 100, "monthlyStep": 500, "hasWeekly": True,
+              "pinnedExpiries": ["2026-11-17"], "pinnedStep": 50, "pinnedBand": 10},
     # NSE discontinued BANKNIFTY weekly expiries in 2023 -- monthly only.
     "bankNifty": {"tradingsymbol": "BANKNIFTY", "monthlyStep": 500, "hasWeekly": False},
     # SENSEX is BSE, not NSE, and trades weeklies on Thursday. Steps are set to
